@@ -2,7 +2,7 @@
 
 This is a quick-and-dirty key value store that 
 attempts to meet the requirements laid out by
-the House interview prompt.
+the interview prompt.
 
 The current model leverages async I/O to allow
 for single-process concurrency and future extension
