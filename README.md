@@ -29,3 +29,8 @@ Needs:
 * a client
 * more control over isolation levels
 * much more
+
+# How to run with docker:
+
+1. docker build -t kvs .
+2. docker run -p 9888:8888 kvs
