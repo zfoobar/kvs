@@ -53,7 +53,10 @@ class CommandProcessor:
                 if session_id in self.transactions:
                     return self._error("Already in transaction.")
                 # start buffering commands
-                self.transactions[session_id] = []
+                # and initialize keys and ops dictionary
+                self.transactions[session_id] = {}
+                self.transactions[session_id]['keys'] = {}
+                self.transactions[session_id]['ops'] = []
                 return self._success(None, "Transaction Started.")
 
             # in our logic, COMMIT only handles mutations to the data.
@@ -66,7 +69,16 @@ class CommandProcessor:
 
                 # Acquire global lock for atomicity.
                 async with self.store.lock:
-                    for op, key, value in self.transactions[session_id]:
+                    # have any of the keys we've buffered changed since
+                    # they were touched?
+                    for key in self.transactions[session_id]['keys']:
+                        current_version = self.store._get_nolock(key)['version']
+                        buffered_version = self.transactions[session_id]['keys'][key]
+                        if current_version != buffered_version:
+                            del self.transactions[session_id]
+                            return self._error("Key version has changed since we last touched the key")
+
+                    for op, key, value in self.transactions[session_id]['ops']:
                         if op == "PUT":
                             self.store._set_nolock(key,value)
                         elif op == "DEL":
@@ -74,20 +86,30 @@ class CommandProcessor:
                 del self.transactions[session_id]
                 return self._success(None, "Transaction committed.")
 
-            if cmd == "ROLLBACK":
+            elif cmd == "ROLLBACK":
                 if session_id not in self.transactions:
                     return self._error("No transaction in progress")
                 self.transactions.pop(session_id) 
                 return self._success(None, "Transaction rolled back.")
 
-            if cmd == "PUT":
+            elif cmd == "PUT":
                 if len(parts) >= 3:
                     key = parts[1]
                     value = ' '.join(parts[2:])
                     # if we're inside a transaction, buffer - otherwise
                     # otherwise immediately execute
                     if session_id in self.transactions:
-                        self.transactions[session_id].append(("PUT",key,value))
+                        self.transactions[session_id]['ops'].append(("PUT",key,value))
+                        # get version of the key
+                        store_status, data = await self.store.get(key)
+                        print(f"DATA: {data}")
+                        if store_status == "OK":
+                            version = data["version"]
+                        else:
+                            # key doesn't exist, init version to 1
+                            version = 1
+                        self.transactions[session_id]['keys'][key] = version
+                        logger.debug(f"Current transaction buffer: {self.transactions}")
                         return self._success(None, f"PUT buffered for key '{key}'.")
                     store_status, data = await self.store.set(key, value)
                 else:
@@ -100,7 +122,7 @@ class CommandProcessor:
                     # consistent with the buffered transaction operations.
                     if session_id in self.transactions:
                         # Search backwards for latest buffered op
-                        for op, k, v in reversed(self.transactions[session_id]):
+                        for op, k, v in reversed(self.transactions[session_id]['ops']):
                             if k == key:
                                 if op == "PUT":
                                     return self._success(v, "GET from transaction buffer")
@@ -108,6 +130,7 @@ class CommandProcessor:
                                     return self._error(f"Key {k} was deleted in this transaction")
                     # No buffered op/key pair found, read through store
                     store_status, data = await self.store.get(key)
+                    logger.debug(f"GET returned: {data}")
                 else:
                     return self._error("GET expect 2 arguments")
 

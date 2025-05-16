@@ -10,7 +10,7 @@ class KeyValueStore:
     """
 
     def __init__(self) -> None:
-        self._store: dict[str, str] = {}
+        self._store: dict[str, dict] = {}
         self._lock: asyncio.Lock = asyncio.Lock()
 
     @property
@@ -24,25 +24,36 @@ class KeyValueStore:
         """Set the value for a given key."""
         async with self._lock:
             try:
-                self._store[key] = value
+                # if the key exists, increment version
+                # otherwise store the key with version set to 1.
+                if key in self._store:
+                    self._store[key]['version'] += 1
+                    self._store[key]['value'] = value
+                else:
+                    self._store[key] = {}
+                    self._store[key]['value'] = value
+                    self._store[key]['version'] = 1
+
                 logger.debug(f"Data Dump: {self._store}")
                 return "OK", None
-            except:
-                return "ERR", "Failed to update key."
+            except Exception as e:
+                return "ERR", f"Failed to update key: {e}"
 
     async def get(self, key: str) -> tuple[str, str]:
         """Get the value of a given key."""
         print(f"{self._store}")
         async with self._lock:
+            data = self._store.get(key,None)
             try:
-                value = self._store.get(key,None)
+                value = data['value']
+                version = data['version']
                 logger.debug(f"Data Dump: {self._store}")
                 if value:
-                    return "OK", value
+                    return "OK", data
                 else:
                     return "ERR", "Key does not exist."
-            except:
-                return "ERR", "Failed to retrieve key."
+            except Exception as e:
+                return "ERR", f"Failed to retrieve key. {e}"
 
     async def delete(self, key: str) -> tuple[str, str]:
         """Delete the given key."""
@@ -61,10 +72,29 @@ class KeyValueStore:
     # INTERNAL: these assume the caller already holds a lock.
     # This is used for transactions. Proceed at your own risk.
 
+    def _get_nolock(self, key: str) -> None:
+        """ GET without re-acquiring the lock. """
+        logger.debug(f"Data Dump: {self._store}")
+        data = self._store.get(key,None)
+        return data
+
     def _set_nolock(self, key: str, value: str) -> None:
         """ Set without re-acquiring the lock. """
-        self._store[key] = value
-        logger.debug(f"Data Dump: {self._store}")
+        try:
+            # if the key exists, increment version
+            # otherwise store the key with version set to 1.
+            if key in self._store:
+                self._store[key]['version'] += 1
+                self._store[key]['value'] = value
+            else:
+                self._store[key] = {}
+                self._store[key]['value'] = value
+                self._store[key]['version'] = 1
+
+            logger.debug(f"Data Dump: {self._store}")
+            return "OK", None
+        except Exception as e:
+            return "ERR", f"Failed to update key: {e}"
 
     def _delete_nolock(self, key: str, value: str) -> None:
         """ Delete without reacquiring the lock. """
